@@ -2,6 +2,10 @@ use clap::{Arg, App, ArgMatches, ErrorKind};
 use std::env;
 use std::path::{PathBuf, Path};
 use env_logger::Env;
+use std::error::Error;
+use std::fs::{DirEntry, ReadDir};
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 
 #[macro_use] extern crate clap;
 #[macro_use] extern crate log;
@@ -22,7 +26,7 @@ fn build_help() -> App<'static, 'static> {
 }
 
 fn get_path_from_env(archive_type: ArchiveType) -> Option<String> {
-    let var = if archive_type == ArchiveType::TV { "TV" } else { "MOVIE" };
+    let var = if archive_type == ArchiveType::TV { "TV" } else { "MOVIES" };
     let path = env::var(var);
     match path {
         Ok(p) => Some(p),
@@ -63,12 +67,14 @@ fn get_arg_directory(args: &ArgMatches) -> Option<PathBuf> {
     Some(directory)
 }
 
-fn get_full_destination(args: &ArgMatches, archive_type: ArchiveType) -> PathBuf {
-    let base_destination = match get_path_from_env(archive_type) {
+fn get_base_destination(args: &ArgMatches, archive_type: ArchiveType) -> PathBuf {
+    match get_path_from_env(archive_type) {
         None => std::process::exit(1),
         Some(p) => PathBuf::from(p)
-    };
+    }
+}
 
+fn get_full_destination(args: &ArgMatches, base_destination: PathBuf) -> PathBuf {
     let destination = match get_arg_directory(args) {
         Some(d) => base_destination.join(d),
         None => base_destination
@@ -78,8 +84,34 @@ fn get_full_destination(args: &ArgMatches, archive_type: ArchiveType) -> PathBuf
     destination
 }
 
-fn unpack_movie() {
+fn get_rar(directory: ReadDir) -> PathBuf {
+    let rar = directory.filter_map(Result::ok).map(move |p| p.path())
+        .filter(|p| p.is_file())
+        .filter(|p| p.extension().is_some())
+        .find(|p| p.extension().unwrap() == "rar");
 
+    match rar {
+        Some(p) => p,
+        None => {
+            error!("Found no rar at path");
+            std::process::exit(5)
+        }
+    }
+}
+
+fn unpack_movie(args: &ArgMatches) {
+    let destination = get_base_destination(args, ArchiveType::Movie);
+    let cwd = get_cwd();
+    info!("Unpacking from {}", cwd.display());
+    let contents = match cwd.read_dir() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Unable to read current directory: {}", e.description());
+            std::process::exit(4);
+        }
+    };
+    let rar = get_rar(contents);
+    println!("{:?}", rar);
 }
 
 fn main() {
@@ -88,5 +120,7 @@ fn main() {
     let archive_type = if matches.is_present("MOVIE") {ArchiveType::Movie } else { ArchiveType::TV };
 
     let count = get_episode_count(&matches);
-    let destination= get_full_destination(&matches, archive_type);
+    let base_destination = get_base_destination(&matches, archive_type);
+    let destination= get_full_destination(&matches, base_destination);
+    unpack_movie(&matches);
 }
